@@ -1,0 +1,90 @@
+plan_name: test1_multisignal_35s
+observation:
+  obs_id: test1_multisignal_35s
+  source_name: inject
+  beam_id: '00'
+  pol_id: '00'
+  scan_id: test1_multisignal_35s
+  target_id: test1_multisignal_35s
+notes:
+  - Validation plan for the uploaded test1.dat (~35.97 s total duration).
+  - Durations and start times are shortened to fit inside the observation.
+  - Signals span a mix of drift rates, widths, and SNRs to stress merge/dedup and recovery.
+defaults:
+  morphology: linear
+  start_s: 0.5
+  duration_s: 10.0
+  drift_hz_per_s: 0.0
+  snr_db: 12.0
+  width_hz: 0.0
+signals:
+  - name: sig_01
+    start_freq_hz: 1418400000.3125
+    start_s: 6.0
+    duration_s: 18.0
+    drift_hz_per_s: 8.0
+    snr_db: 10.0
+    width_hz: 7.0
+  - name: sig_02
+    start_freq_hz: 1418500000.3125
+    start_s: 10.0
+    duration_s: 15.0
+    drift_hz_per_s: 34.0
+    snr_db: 12.0
+    width_hz: 4.0
+  - name: sig_03
+    start_freq_hz: 1418600000.3125
+    start_s: 2.0
+    duration_s: 20.0
+    drift_hz_per_s: -5.0
+    snr_db: 10.0
+    width_hz: 8.0
+  - name: sig_04
+    start_freq_hz: 1418700000.3125
+    start_s: 1.0
+    duration_s: 20.0
+    drift_hz_per_s: 5.0
+    snr_db: 15.0
+    width_hz: 8.0
+  - name: sig_05
+    start_freq_hz: 1418800000.3125
+    start_s: 0.6
+    duration_s: 24.0
+    drift_hz_per_s: -8.0
+    snr_db: 19.0
+    width_hz: 5.0
+  - name: sig_06
+    start_freq_hz: 1418900000.3125
+    start_s: 0.8
+    duration_s: 18.0
+    drift_hz_per_s: 10.0
+    snr_db: 14.0
+    width_hz: 0.0
+  - name: sig_07
+    start_freq_hz: 1419000000.3125
+    start_s: 0.5
+    duration_s: 30.0
+    drift_hz_per_s: -2.0
+    snr_db: 11.5
+    width_hz: 6.0
+  - name: sig_08
+    start_freq_hz: 1419100000.3125
+    start_s: 0.4
+    duration_s: 5.0
+    drift_hz_per_s: 12.0
+    snr_db: 14.5
+    width_hz: 6.0
+  - name: sig_09
+    start_freq_hz: 1419200000.3125
+    start_s: 0.5
+    duration_s: 16.0
+    drift_hz_per_s: -14.0
+    snr_db: 8.5
+    width_hz: 0.0
+  - name: sig_10
+    start_freq_hz: 1419300000.3125
+    start_s: 8.0
+    duration_s: 10.0
+    drift_hz_per_s: 15.0
+    snr_db: 8.0
+    width_hz: 6.0

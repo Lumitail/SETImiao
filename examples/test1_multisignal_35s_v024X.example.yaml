@@ -1,0 +1,96 @@
+plan_name: test1_multisignal_35s_v024X_validation
+observation:
+  obs_id: test1_multisignal_35s_v024X_validation
+  source_name: inject
+  beam_id: '00'
+  pol_id: '00'
+  scan_id: test1_multisignal_35s_v024X_validation
+  target_id: test1_multisignal_35s_v024X_validation
+notes:
+- Historical filename retained for compatibility; frequencies in this example are
+  intentionally nonuniform.
+- Every signal shows independent control over start time, duration, frequency, drift,
+  SNR, and width.
+- Widths are kept inside a single coarse channel; for broadband injections use broadband_contig/checkerboard.
+- snr_db is the requested active-sample RMS ratio relative to the original channel
+  RMS.
+- If a request would clip int8 I/Q samples, the injector now limits the amplitude
+  and reports realized_snr_db in injected.inject.json.
+defaults:
+  morphology: linear
+  start_s: 0.16
+  duration_s: 89.4
+  drift_hz_per_s: 0.0
+  snr_db: 18.0
+  width_hz: 0.0
+signals:
+- name: sig_01
+  start_freq_hz: 1418400000.3125
+  start_s: 2.0
+  duration_s: 20.0
+  drift_hz_per_s: 8.0
+  snr_db: 8.0
+  width_hz: 7.0
+- name: sig_02
+  start_freq_hz: 1418500000.3125
+  start_s: 10.0
+  duration_s: 12.0
+  drift_hz_per_s: 34.0
+  snr_db: 12.0
+  width_hz: 4.0
+- name: sig_03
+  start_freq_hz: 1418600000.3125
+  start_s: 4.0
+  duration_s: 25.0
+  drift_hz_per_s: -5.0
+  snr_db: 8.0
+  width_hz: 8.0
+- name: sig_04
+  start_freq_hz: 1418700000.3125
+  start_s: 5.0
+  duration_s: 20.0
+  drift_hz_per_s: 5.0
+  snr_db: 15.0
+  width_hz: 8.0
+- name: sig_05
+  start_freq_hz: 1418800000.3125
+  start_s: 0.5
+  duration_s: 25.0
+  drift_hz_per_s: -8.0
+  snr_db: 19.0
+  width_hz: 5.0
+- name: sig_06
+  start_freq_hz: 1418900000.3125
+  start_s: 1.0
+  duration_s: 20.0
+  drift_hz_per_s: 10.0
+  snr_db: 14.0
+  width_hz: 0.0
+- name: sig_07
+  start_freq_hz: 1419000000.3125
+  start_s: 0.5
+  duration_s: 30.0
+  drift_hz_per_s: -2.0
+  snr_db: 11.5
+  width_hz: 6.0
+- name: sig_08
+  start_freq_hz: 1419100000.3125
+  start_s: 2.0
+  duration_s: 10.0
+  drift_hz_per_s: 12.0
+  snr_db: 14.5
+  width_hz: 6.0
+- name: sig_09
+  start_freq_hz: 1419200000.3125
+  start_s: 0.3
+  duration_s: 25.0
+  drift_hz_per_s: -14.0
+  snr_db: 8.5
+  width_hz: 0.0
+- name: sig_10
+  start_freq_hz: 1419300000.3125
+  start_s: 10.0
+  duration_s: 20.0
+  drift_hz_per_s: 15.0
+  snr_db: 8.0
+  width_hz: 6.0

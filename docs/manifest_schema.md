@@ -1,0 +1,1 @@
+A manifest is a YAML file with an `observations` list. Each entry must include `obs_id` and `dat_paths`; optional fields include source/beam/pol/scan/target/lo_hz/start_coarse_channel.

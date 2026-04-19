@@ -1,0 +1,1 @@
+See README and the original development brief for the `.dat` contract. ACS assumes packed int8 I/Q in a row-major (rows,256) payload.

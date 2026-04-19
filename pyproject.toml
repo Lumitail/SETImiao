@@ -1,0 +1,30 @@
+
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "adaptive-chirp-search"
+version = "1.0.0+x"
+description = "Adaptive Chirp Search for channelized raw .dat observations"
+readme = "README.md"
+requires-python = ">=3.10"
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [{name = "ACS Committee"}]
+dependencies = [
+  "numpy>=1.26",
+  "scipy>=1.10",
+  "PyYAML>=6.0",
+  "matplotlib>=3.7",
+  "numba>=0.61",
+]
+optional-dependencies.dev = ["pytest>=8.0"]
+
+[project.scripts]
+acs = "acs.cli.main:main"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+[tool.setuptools.packages.find]
+where = ["src"]

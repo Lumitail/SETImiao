@@ -1,0 +1,49 @@
+plan_name: custom_multisignal_example
+observation:
+  obs_id: custom_multisignal_example
+  source_name: inject
+  beam_id: '00'
+  pol_id: '00'
+  scan_id: custom_multisignal_example
+  target_id: custom_multisignal_example
+notes:
+- Edit the signals list to add or remove injections.
+- Each signal can override its own timing, start frequency, drift, SNR, and width.
+- start_freq_hz and width_hz are the user-facing YAML names.
+- snr_db is a raw active-sample RMS target relative to the original channel RMS.
+- If the requested amplitude would clip int8 samples, the injector caps it and reports
+  realized_snr_db in the JSON report.
+defaults:
+  morphology: linear
+  snr_db: 20.0
+  start_s: 0.2
+  duration_s: 1.4
+  drift_hz_per_s: 0.0
+  width_hz: 0.0
+signals:
+- name: sig_a
+  start_freq_hz: 1418103606.25
+  start_s: 0.1
+  duration_s: 1.55
+  drift_hz_per_s: 0.0
+  snr_db: 22.0
+  width_hz: 0.0
+- name: sig_b
+  channel_index: 40
+  offset_hz: 900.0
+  start_s: 0.25
+  duration_s: 1.25
+  drift_hz_per_s: 6.0
+  snr_db: 19.0
+  width_hz: 6.0
+- name: sig_c
+  channel_index: 56
+  offset_hz: -800.0
+  morphology: intermittent
+  start_s: 0.32
+  duration_s: 0.9
+  drift_hz_per_s: -4.0
+  snr_db: 18.0
+  width_hz: 4.0
+  duty_cycle: 0.45
+  period_s: 0.1

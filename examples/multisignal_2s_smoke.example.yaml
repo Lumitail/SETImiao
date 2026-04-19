@@ -1,0 +1,51 @@
+plan_name: multisignal_2s_smoke
+observation:
+  obs_id: inject_obs
+  source_name: inject
+  beam_id: '00'
+  pol_id: '00'
+  scan_id: inject_scan
+  target_id: inject_target
+notes:
+  - Short-duration smoke plan sized for a single 2.048 s observation tile.
+  - Used for end-to-end validation of inject -> inspect -> qc -> search -> review.
+defaults:
+  morphology: linear
+  start_s: 0.10
+  duration_s: 1.20
+  drift_hz_per_s: 0.0
+  snr_db: 18.0
+  width_hz: 0.0
+signals:
+  - name: smoke_01
+    channel_index: 24
+    offset_hz: 1000.0
+    start_s: 0.08
+    duration_s: 1.50
+    drift_hz_per_s: 6.0
+    snr_db: 20.0
+    width_hz: 6.0
+  - name: smoke_02
+    channel_index: 38
+    offset_hz: -900.0
+    start_s: 0.22
+    duration_s: 1.10
+    drift_hz_per_s: -8.0
+    snr_db: 19.0
+    width_hz: 4.0
+  - name: smoke_03
+    channel_index: 54
+    offset_hz: 700.0
+    start_s: 0.40
+    duration_s: 0.72
+    drift_hz_per_s: 12.0
+    snr_db: 18.0
+    width_hz: 0.0
+  - name: smoke_04
+    channel_index: 70
+    offset_hz: -1200.0
+    start_s: 0.55
+    duration_s: 0.54
+    drift_hz_per_s: -15.0
+    snr_db: 18.0
+    width_hz: 5.0

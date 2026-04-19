@@ -1,0 +1,12 @@
+
+observations:
+  - obs_id: example_obs
+    dat_paths:
+      - /absolute/path/to/file.dat
+    source_name: example
+    beam_id: "00"
+    pol_id: "00"
+    scan_id: "scan0"
+    target_id: "example"
+    lo_hz: 1000000000.0
+    start_coarse_channel: 27392

@@ -1,0 +1,66 @@
+plan_name: test1_low_snr_6sig_35s_v025X
+observation:
+  obs_id: test1_low_snr_6sig
+  source_name: inject
+  beam_id: '00'
+  pol_id: '00'
+  scan_id: test1_low_snr_6sig
+  target_id: test1_low_snr_6sig
+notes:
+- Fast 35-second low-SNR validation with six continuous linear signals.
+defaults:
+  morphology: linear
+  start_s: 5.0
+  duration_s: 24.0
+  drift_hz_per_s: 13.0
+  snr_db: 1.0
+  width_hz: 0.0
+signals:
+- name: sig_01
+  channel_index: 28
+  offset_hz: 4000.0
+  start_s: 5.0
+  duration_s: 24.0
+  drift_hz_per_s: 13.0
+  snr_db: 1.0
+  width_hz: 0.0
+- name: sig_02
+  channel_index: 34
+  offset_hz: 4000.0
+  start_s: 5.0
+  duration_s: 24.0
+  drift_hz_per_s: 13.0
+  snr_db: 2.0
+  width_hz: 0.0
+- name: sig_03
+  channel_index: 40
+  offset_hz: 4000.0
+  start_s: 5.0
+  duration_s: 24.0
+  drift_hz_per_s: 13.0
+  snr_db: 3.0
+  width_hz: 0.0
+- name: sig_04
+  channel_index: 46
+  offset_hz: 4000.0
+  start_s: 5.0
+  duration_s: 24.0
+  drift_hz_per_s: 13.0
+  snr_db: 5.0
+  width_hz: 0.0
+- name: sig_05
+  channel_index: 52
+  offset_hz: 4000.0
+  start_s: 5.0
+  duration_s: 24.0
+  drift_hz_per_s: 13.0
+  snr_db: 8.0
+  width_hz: 0.0
+- name: sig_06
+  channel_index: 58
+  offset_hz: 4000.0
+  start_s: 5.0
+  duration_s: 24.0
+  drift_hz_per_s: 13.0
+  snr_db: 10.0
+  width_hz: 0.0

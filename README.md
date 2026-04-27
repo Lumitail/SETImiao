@@ -1,4 +1,4 @@
-# Adaptive Chirp Search (ACS) v0.2.3
+# SETImiao (or the Adaptive Chirp Search (ACS) )
 
 ACS is a research-grade narrowband search tool for channelized raw `.dat` radio data. It assumes the exact contract validated from the development brief and QC script:
 

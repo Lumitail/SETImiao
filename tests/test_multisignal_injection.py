@@ -283,3 +283,97 @@ def test_headroom_rescaling_is_reported_cleanly():
     assert target['channel_scale'] < 1.0
     assert target['realized_snr_db'] is not None
     assert abs(target['realized_snr_db'] - target['requested_snr_db']) < 0.75
+
+
+def test_legacy_yaml_without_snr_reference_defaults_to_coarse_channel(tmp_path: Path):
+    contract = DatContract(lo_hz=1e9, start_coarse_channel=27392)
+    plan_path = tmp_path / 'legacy.yaml'
+    plan_path.write_text(yaml.safe_dump({
+        'plan_name': 'legacy_snr_mode',
+        'defaults': {'morphology': 'linear', 'snr_db': 5.0, 'start_s': 0.1, 'duration_s': 0.2},
+        'signals': [{'name': 'legacy_sig', 'channel_index': 20, 'offset_hz': 1000.0}],
+    }), encoding='utf-8')
+    plan = load_injection_plan(plan_path, contract)
+    assert plan.signals[0].snr_reference == 'coarse_channel'
+    assert plan.signals[0].noise_estimator == 'coarse_psd'
+
+
+def test_local_psd_report_fields_and_realized_snr_close():
+    contract = DatContract(lo_hz=1e9, start_coarse_channel=27392)
+    rows = 8192
+    words = _random_words(rows, seed=123)
+    band_start = contract.lo_hz + contract.start_coarse_channel * contract.coarse_df_hz
+    case = InjectionCase(
+        'local_psd_sig',
+        'linear',
+        band_start + 25 * contract.coarse_df_hz + 900.0,
+        3.0,
+        start_s=0.1,
+        duration_s=0.25,
+        bandwidth_hz=0.0,
+        snr_reference='local_psd',
+        noise_estimator='coarse_psd',
+    )
+    _, report = inject_cases_into_words(words.reshape(rows, 256), contract, [case], stft_nfft=2048)
+    sig = report['signals'][0]
+    assert sig['snr_reference'] == 'local_psd'
+    assert sig['noise_estimator'] == 'coarse_psd'
+    for key in [
+        'requested_snr_db',
+        'requested_local_psd_snr_db',
+        'realized_local_psd_snr_db',
+        'local_noise_psd',
+        'reference_bandwidth_hz',
+        'reference_noise_power',
+        'requested_signal_power',
+        'realized_signal_power',
+        'applied_amplitude',
+    ]:
+        assert key in sig
+    assert abs(sig['requested_local_psd_snr_db'] - 3.0) < 1e-9
+    assert abs(sig['realized_local_psd_snr_db'] - 3.0) < 0.05
+
+
+def test_local_psd_width_zero_uses_one_stft_resolution_element():
+    contract = DatContract(lo_hz=1e9, start_coarse_channel=27392)
+    rows = 4096
+    words = _random_words(rows, seed=124)
+    band_start = contract.lo_hz + contract.start_coarse_channel * contract.coarse_df_hz
+    case = InjectionCase(
+        'zero_width_local_psd',
+        'linear',
+        band_start + 26 * contract.coarse_df_hz + 900.0,
+        0.0,
+        start_s=0.1,
+        duration_s=0.15,
+        bandwidth_hz=0.0,
+        snr_reference='local_psd',
+    )
+    _, report = inject_cases_into_words(words.reshape(rows, 256), contract, [case], stft_nfft=4096)
+    sig = report['signals'][0]
+    expected = contract.coarse_df_hz / 4096
+    assert abs(sig['reference_bandwidth_hz'] - expected) < 1e-12
+    assert sig['reference_bandwidth_source'] == 'one_stft_resolution_element'
+
+
+def test_local_psd_positive_width_uses_signal_width():
+    contract = DatContract(lo_hz=1e9, start_coarse_channel=27392)
+    rows = 4096
+    words = _random_words(rows, seed=125)
+    band_start = contract.lo_hz + contract.start_coarse_channel * contract.coarse_df_hz
+    case = InjectionCase(
+        'finite_width_local_psd',
+        'linear',
+        band_start + 27 * contract.coarse_df_hz + 900.0,
+        0.0,
+        start_s=0.1,
+        duration_s=0.15,
+        bandwidth_hz=25.0,
+        n_tones=5,
+        snr_reference='local_psd',
+    )
+    _, report = inject_cases_into_words(words.reshape(rows, 256), contract, [case], stft_nfft=2048)
+    sig = report['signals'][0]
+    assert abs(sig['reference_bandwidth_hz'] - 25.0) < 1e-12
+    assert sig['reference_bandwidth_source'] == 'width_hz'
+    assert abs(sig['realized_local_psd_snr_db'] - 0.0) < 0.05

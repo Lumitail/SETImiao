@@ -1,0 +1,1 @@
+Review artifacts consist of per-event PNG, PDF, JSON and an HTML index. The final human-inspection step is centered on these outputs.

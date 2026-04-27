@@ -18,11 +18,20 @@ def get_window(name: str, n: int) -> np.ndarray:
 def frame_times_s(n_frames: int, hop: int, nfft: int, coarse_sr_hz: float) -> np.ndarray:
     return ((np.arange(n_frames) * hop) + (nfft / 2.0)) / coarse_sr_hz
 
-def build_spectrogram_tile(obs: StitchedObservation, row0: int, row1: int, stft: STFTConfig) -> SpectrogramTile:
-    words = read_rows(obs, row0, row1)
-    if words.shape[0] < stft.nfft:
+def build_spectrogram_tile(obs: StitchedObservation, row0: int, row1: int, stft: STFTConfig, channel_indices: list[int] | tuple[int, ...] | None = None) -> SpectrogramTile:
+    if channel_indices is None:
+        selected = tuple(range(obs.contract.channels))
+        words_sel = read_rows(obs, row0, row1)
+    else:
+        selected = tuple(int(c) for c in channel_indices)
+        if len(selected) == 0:
+            raise ValueError("channel_indices is empty")
+        if min(selected) < 0 or max(selected) >= obs.contract.channels:
+            raise ValueError("channel_indices contains an out-of-range coarse channel")
+        words_sel = read_rows(obs, row0, row1, channels=selected)
+    if words_sel.shape[0] < stft.nfft:
         raise ValueError("Tile shorter than NFFT")
-    x = decode_words_to_complex64(words)
+    x = decode_words_to_complex64(words_sel)
     x = x - x.mean(axis=0, keepdims=True)
     n_rows, channels = x.shape
     n_frames = 1 + (n_rows - stft.nfft) // stft.hop
@@ -34,7 +43,7 @@ def build_spectrogram_tile(obs: StitchedObservation, row0: int, row1: int, stft:
         spec = np.fft.fftshift(np.fft.fft(seg, axis=0), axes=0)
         p = (spec.real * spec.real + spec.imag * spec.imag).astype(np.float32)
         power[fi] = np.transpose(p, (1, 0))
-    fine = obs.freq_map.coarse_centers_hz[:, None] + fine_offsets_hz(obs.contract, stft.nfft)[None, :]
+    fine = obs.freq_map.coarse_centers_hz[list(selected), None] + fine_offsets_hz(obs.contract, stft.nfft)[None, :]
     return SpectrogramTile(
         obs_id=obs.meta.obs_id,
         beam_id=obs.meta.beam_id,
@@ -43,6 +52,7 @@ def build_spectrogram_tile(obs: StitchedObservation, row0: int, row1: int, stft:
         target_id=obs.meta.target_id,
         row0=row0,
         row1=row1,
+        channel_indices=selected,
         power=power,
         norm_power=np.empty_like(power),
         mask=np.zeros((channels, stft.nfft), dtype=bool),

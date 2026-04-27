@@ -1,7 +1,7 @@
 from __future__ import annotations
 from pathlib import Path
 import yaml
-from .types import DatContract, STFTConfig, BaselineConfig, DriftConfig, RefineConfig, CoincidenceConfig, CandidateConfig, ReviewConfig, RuntimeConfig
+from .types import DatContract, STFTConfig, BaselineConfig, DriftConfig, RefineConfig, CoincidenceConfig, CandidateConfig, ReviewConfig, MeasurementConfig, RuntimeConfig
 
 
 def _as_tuple_ints(v, default):
@@ -28,6 +28,7 @@ def load_runtime_config(path: str | Path) -> RuntimeConfig:
     cc = obj.get("coincidence", {})
     cand = obj.get("candidate", {})
     rv = obj.get("review", {})
+    meas = obj.get("measurement", {})
     return RuntimeConfig(
         contract=contract,
         search_tile_rows=int(obj.get("search_tile_rows", 31250)),
@@ -60,6 +61,7 @@ def load_runtime_config(path: str | Path) -> RuntimeConfig:
             support_threshold=float(d.get("support_threshold", 1.5)),
             channel_min=int(d["channel_min"]) if d.get("channel_min") is not None else None,
             channel_max=int(d["channel_max"]) if d.get("channel_max") is not None else None,
+            channel_list=_as_tuple_ints(d.get("channel_list"), ()) if d.get("channel_list") is not None else None,
         ),
         refine=RefineConfig(
             enabled=bool(r.get("enabled", True)),
@@ -101,11 +103,42 @@ def load_runtime_config(path: str | Path) -> RuntimeConfig:
             dedup_max_gap_s=float(cand.get("dedup_max_gap_s", 1.0)),
             dedup_short_freq_tol_hz=float(cand.get("dedup_short_freq_tol_hz", 256.0)),
             dedup_short_drift_tol_hz_per_s=float(cand.get("dedup_short_drift_tol_hz_per_s", 24.0)),
+            track_inlier_filter_enabled=bool(cand.get("track_inlier_filter_enabled", True)),
+            track_inlier_freq_tol_hz=float(cand.get("track_inlier_freq_tol_hz", 60.0)),
+            track_inlier_drift_tol_hz_per_s=float(cand.get("track_inlier_drift_tol_hz_per_s", 2.0)),
+            track_inlier_min_refined_snr=float(cand.get("track_inlier_min_refined_snr", 14.0)),
+            track_inlier_max_refined_drop_db=float(cand.get("track_inlier_max_refined_drop_db", 6.0)),
+            merge_long_gap_s=float(cand.get("merge_long_gap_s", 0.0)),
+            merge_long_gap_min_hits=int(cand.get("merge_long_gap_min_hits", 4)),
+            merge_long_gap_freq_tol_hz=float(cand.get("merge_long_gap_freq_tol_hz", 128.0)),
+            merge_long_gap_drift_tol_hz_per_s=float(cand.get("merge_long_gap_drift_tol_hz_per_s", 3.0)),
+            short_track_max_hits=int(cand.get("short_track_max_hits", 2)),
+            short_track_max_duration_s=float(cand.get("short_track_max_duration_s", 2.5)),
+            short_track_min_refined_snr=float(cand.get("short_track_min_refined_snr", 14.0)),
+            short_track_min_event_score=float(cand.get("short_track_min_event_score", 16.0)),
         ),
         review=ReviewConfig(
             top_k=int(rv.get("top_k", 100)),
             cutout_frames=int(rv.get("cutout_frames", 21)),
             cutout_bins=int(rv.get("cutout_bins", 128)),
             overview_max_frames=int(rv.get("overview_max_frames", 320)),
+            write_pdf=bool(rv.get("write_pdf", True)),
+            show_track_aligned=bool(rv.get("show_track_aligned", True)),
+            aligned_half_width_bins=int(rv.get("aligned_half_width_bins", 48)),
+            aligned_profile_guard_bins=int(rv.get("aligned_profile_guard_bins", 4)),
+            visual_evidence_min_peak_excess_db=float(rv.get("visual_evidence_min_peak_excess_db", 0.0)),
+            visual_evidence_min_center_excess_db=float(rv.get("visual_evidence_min_center_excess_db", -3.0)),
+        ),
+        measurement=MeasurementConfig(
+            enabled=bool(meas.get("enabled", True)),
+            method=str(meas.get("method", "stft_local_background")),
+            bg_half_width_bins=int(meas.get("bg_half_width_bins", 128)),
+            guard_bins=int(meas.get("guard_bins", 8)),
+            min_background_pixels=int(meas.get("min_background_pixels", 256)),
+            noise_statistic=str(meas.get("noise_statistic", "median")),
+            min_ridge_bins=int(meas.get("min_ridge_bins", 1)),
+            max_ridge_bins=int(meas.get("max_ridge_bins", 17)),
+            ridge_width_source=str(meas.get("ridge_width_source", "auto")),
+            ridge_snap_half_width_bins=int(meas.get("ridge_snap_half_width_bins", 2)),
         ),
     )

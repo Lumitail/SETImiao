@@ -74,8 +74,15 @@ candidate:
   allow_singleton_candidates: false
   min_candidate_hits: 3
   min_candidate_duration_s: 4.0
+  track_inlier_min_refined_snr: 14.0
+  track_inlier_max_refined_drop_db: 6.0
 review:
   top_k: 50
   cutout_frames: 21
   cutout_bins: 128
   overview_max_frames: 320
+  show_track_aligned: true
+  aligned_half_width_bins: 48
+  aligned_profile_guard_bins: 4
+  visual_evidence_min_peak_excess_db: 0.0
+  visual_evidence_min_center_excess_db: -3.0

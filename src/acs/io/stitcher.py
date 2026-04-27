@@ -68,10 +68,20 @@ def build_observations_from_specs(specs: list[ObservationSpec], contract: DatCon
         obs_list.append(obs)
     return obs_list
 
-def read_rows(obs: StitchedObservation, row0: int, row1: int) -> np.ndarray:
+def read_rows(obs: StitchedObservation, row0: int, row1: int, channels: tuple[int, ...] | list[int] | None = None) -> np.ndarray:
     if row0 < 0 or row1 > obs.total_rows or row1 < row0:
         raise ValueError("Bad row slice")
-    out = np.empty((row1 - row0, obs.contract.channels), dtype=np.uint16)
+    if channels is None:
+        channel_sel = None
+        out_channels = obs.contract.channels
+    else:
+        channel_sel = tuple(int(c) for c in channels)
+        if len(channel_sel) == 0:
+            raise ValueError("channels is empty")
+        if min(channel_sel) < 0 or max(channel_sel) >= obs.contract.channels:
+            raise ValueError("channels contains an out-of-range coarse channel")
+        out_channels = len(channel_sel)
+    out = np.empty((row1 - row0, out_channels), dtype=np.uint16)
     write_ptr = 0
     for seg in obs.segments:
         if row1 <= seg.row_start or row0 >= seg.row_stop:
@@ -81,7 +91,10 @@ def read_rows(obs: StitchedObservation, row0: int, row1: int) -> np.ndarray:
         src0 = loc0 - seg.row_start
         src1 = loc1 - seg.row_start
         mm = open_raw_u16_memmap(seg.path, seg.rows, obs.contract.channels)
-        block = np.asarray(mm[src0:src1], dtype=np.uint16)
+        if channel_sel is None:
+            block = np.asarray(mm[src0:src1], dtype=np.uint16)
+        else:
+            block = np.asarray(mm[src0:src1, list(channel_sel)], dtype=np.uint16)
         out[write_ptr:write_ptr + len(block)] = block
         write_ptr += len(block)
     return out

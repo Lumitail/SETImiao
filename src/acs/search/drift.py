@@ -9,6 +9,28 @@ def make_drift_trials(cfg: DriftConfig) -> np.ndarray:
     return np.arange(cfg.min_hz_per_s, cfg.max_hz_per_s + 0.5 * step, step, dtype=np.float32)
 
 
+
+def iter_search_channels(n_channels: int, cfg: DriftConfig) -> list[int]:
+    """Return the coarse-channel indices searched by drift extraction.
+
+    channel_list is a sparse channel-selection control for injection validation
+    and targeted follow-up.  If channel_min/channel_max are also set, the list is
+    filtered by that window.  When channel_list is omitted, behavior is unchanged.
+    """
+    ch0 = 0 if cfg.channel_min is None else max(0, int(cfg.channel_min))
+    ch1 = n_channels if cfg.channel_max is None else min(n_channels, int(cfg.channel_max) + 1)
+    if cfg.channel_list is None:
+        return list(range(ch0, ch1))
+    out: list[int] = []
+    seen: set[int] = set()
+    for raw in cfg.channel_list:
+        ch = int(raw)
+        if 0 <= ch < n_channels and ch0 <= ch < ch1 and ch not in seen:
+            out.append(ch)
+            seen.add(ch)
+    return out
+
+
 def _pick_top_bins(score: np.ndarray, valid_mask: np.ndarray, top_k: int, min_sep: int) -> list[int]:
     valid_idx = np.flatnonzero(valid_mask)
     if valid_idx.size == 0:
@@ -26,9 +48,11 @@ def _pick_top_bins(score: np.ndarray, valid_mask: np.ndarray, top_k: int, min_se
 def extract_seeds(tile: SpectrogramTile, cfg: DriftConfig) -> list[Seed]:
     seeds: list[Seed] = []
     channels, _ = tile.mean_excess_db.shape
-    ch0 = 0 if cfg.channel_min is None else max(0, int(cfg.channel_min))
-    ch1 = channels if cfg.channel_max is None else min(channels, int(cfg.channel_max) + 1)
-    for ch in range(ch0, ch1):
+    if tile.channel_indices is not None and len(tile.channel_indices) == channels:
+        search_channels = list(range(channels))
+    else:
+        search_channels = iter_search_channels(channels, cfg)
+    for ch in search_channels:
         valid = ~tile.mask[ch]
         mean_bins = _pick_top_bins(tile.mean_excess_db[ch], valid, cfg.seed_top_k_mean_per_channel, cfg.seed_min_separation_bins)
         max_bins = _pick_top_bins(tile.max_excess_db[ch], valid, cfg.seed_top_k_max_per_channel, cfg.seed_min_separation_bins)
@@ -114,7 +138,7 @@ def search_tile(tile: SpectrogramTile, cfg: DriftConfig) -> list[Hit]:
                 row1=tile.row1,
                 tile_row0=tile.row0,
                 tile_row1=tile.row1,
-                coarse_channel=ch,
+                coarse_channel=int(tile.channel_indices[ch]) if tile.channel_indices is not None else ch,
                 fine_bin=seed.fine_bin,
                 anchor_frame=seed.anchor_frame,
                 freq_hz=float(tile.fine_freq_hz[ch, seed.fine_bin]),

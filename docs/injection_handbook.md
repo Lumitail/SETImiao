@@ -1,6 +1,6 @@
 # Injection Handbook
 
-ACS supports two related injection modes:
+ACS v0.2.0 supports two related injection modes:
 
 - **independent multi-signal injection** via `acs inject-signals`
 - **built-in benchmark suites** via `acs benchmark-inject`
@@ -177,7 +177,7 @@ Multi-channel RFI-like:
 - `broadband_contig`
 - `checkerboard`
 
-## Important injection behavior
+## Important behavior in v0.2.0
 
 ### Multiple signals are injected into one output `.dat`
 

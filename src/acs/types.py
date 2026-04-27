@@ -116,6 +116,7 @@ class DriftConfig:
     support_threshold: float = 1.5
     channel_min: Optional[int] = None
     channel_max: Optional[int] = None
+    channel_list: Optional[tuple[int, ...]] = None
 
 @dataclass(frozen=True)
 class RefineConfig:
@@ -167,6 +168,32 @@ class CandidateConfig:
     dedup_max_gap_s: float = 1.0
     dedup_short_freq_tol_hz: float = 256.0
     dedup_short_drift_tol_hz_per_s: float = 24.0
+    # v1.1.1x: after permissive low-SNR merging, discard hits that do not lie
+    # on the best recovered time-frequency track before scoring and estimating
+    # duration.  This prevents sparse raw/noise fragments from stretching a
+    # short injected signal into an overlong event.
+    track_inlier_filter_enabled: bool = True
+    track_inlier_freq_tol_hz: float = 60.0
+    track_inlier_drift_tol_hz_per_s: float = 2.0
+    # v1.1.4x: keep event support tied not only to geometry but also to
+    # coherent support strength. This prevents weak off-track/noise tiles from
+    # extending a real short injection into a much longer, visually empty event.
+    track_inlier_min_refined_snr: float = 14.0
+    track_inlier_max_refined_drop_db: float = 6.0
+    # v1.1.2x: optional long-gap merge for weak continuous tracks. Disabled by
+    # default unless a config sets merge_long_gap_s > merge_max_gap_s.  It only
+    # applies when both fragments have enough support and their extrapolated
+    # time-frequency tracks agree across the gap.
+    merge_long_gap_s: float = 0.0
+    merge_long_gap_min_hits: int = 4
+    merge_long_gap_freq_tol_hz: float = 128.0
+    merge_long_gap_drift_tol_hz_per_s: float = 3.0
+    # v1.1.4x: very short, low-hit events need stronger evidence before they
+    # become final candidates. They remain in events.jsonl for all-event review.
+    short_track_max_hits: int = 2
+    short_track_max_duration_s: float = 2.5
+    short_track_min_refined_snr: float = 14.0
+    short_track_min_event_score: float = 16.0
 
 @dataclass(frozen=True)
 class ReviewConfig:
@@ -174,6 +201,30 @@ class ReviewConfig:
     cutout_frames: int = 21
     cutout_bins: int = 128
     overview_max_frames: int = 320
+    write_pdf: bool = True
+    # v1.1.3X: render a de-drifted / track-aligned diagnostic panel.  This is
+    # specifically for weak continuous SETI-like signals whose individual
+    # waterfall pixels can be invisible in the ordinary waterfall even when the
+    # integrated detection is valid.
+    show_track_aligned: bool = True
+    aligned_half_width_bins: int = 48
+    aligned_profile_guard_bins: int = 4
+    visual_evidence_min_peak_excess_db: float = 0.0
+    visual_evidence_min_center_excess_db: float = -3.0
+
+
+@dataclass(frozen=True)
+class MeasurementConfig:
+    enabled: bool = True
+    method: str = "stft_local_background"
+    bg_half_width_bins: int = 128
+    guard_bins: int = 8
+    min_background_pixels: int = 256
+    noise_statistic: str = "median"
+    min_ridge_bins: int = 1
+    max_ridge_bins: int = 17
+    ridge_width_source: str = "auto"
+    ridge_snap_half_width_bins: int = 0
 
 @dataclass(frozen=True)
 class RuntimeConfig:
@@ -187,6 +238,7 @@ class RuntimeConfig:
     coincidence: CoincidenceConfig
     candidate: CandidateConfig
     review: ReviewConfig
+    measurement: MeasurementConfig
 
 @dataclass
 class SpectrogramTile:
@@ -197,6 +249,7 @@ class SpectrogramTile:
     target_id: Optional[str]
     row0: int
     row1: int
+    channel_indices: Optional[tuple[int, ...]]
     power: ArrayF32
     norm_power: ArrayF32
     mask: ArrayBool

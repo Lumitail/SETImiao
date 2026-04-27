@@ -1,0 +1,54 @@
+plan_name: test1_local_psd_sensitivity_5s_v101x
+observation:
+  obs_id: test1_local_psd_sensitivity_5s_v101x
+  source_name: inject
+  beam_id: '00'
+  pol_id: '00'
+  scan_id: test1_local_psd_sensitivity_5s_v101x
+  target_id: test1_local_psd_sensitivity_5s_v101x
+notes:
+- Validation plan for the uploaded test1.dat in this environment. The file has 87,808 rows, about 5.755 seconds under the ACS contract.
+- Uses the new local_psd SNR reference. width_hz=0 uses one STFT resolution element as the reference bandwidth.
+defaults:
+  morphology: linear
+  start_s: 0.65
+  duration_s: 3.80
+  drift_hz_per_s: 8.0
+  width_hz: 0.0
+  snr_reference: local_psd
+  noise_estimator: coarse_psd
+  freq_tolerance_hz: 180.0
+  drift_tolerance_hz_per_s: 12.0
+signals:
+- name: lp_-40db
+  channel_index: 24
+  offset_hz: 900.0
+  snr_db: -40.0
+- name: lp_-30db
+  channel_index: 32
+  offset_hz: 900.0
+  snr_db: -30.0
+- name: lp_-10db
+  channel_index: 40
+  offset_hz: 900.0
+  snr_db: -10.0
+- name: lp_-5db
+  channel_index: 48
+  offset_hz: 900.0
+  snr_db: -5.0
+- name: lp_0db
+  channel_index: 56
+  offset_hz: 900.0
+  snr_db: 0.0
+- name: lp_3db
+  channel_index: 64
+  offset_hz: 900.0
+  snr_db: 3.0
+- name: lp_5db
+  channel_index: 72
+  offset_hz: 900.0
+  snr_db: 5.0
+- name: lp_8db
+  channel_index: 80
+  offset_hz: 900.0
+  snr_db: 8.0

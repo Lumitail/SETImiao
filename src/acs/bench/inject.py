@@ -42,6 +42,9 @@ class InjectionCase:
     coarse_channel_step: int = 1
     amplitude_taper: str = "flat"   # flat | alternating | triangular
     checkerboard_period: int = 4
+    # SNR scaling mode. The legacy default keeps v1.0.0x behavior.
+    snr_reference: str = "coarse_channel"   # coarse_channel | local_psd
+    noise_estimator: str = "coarse_psd"     # first local_psd implementation
 
     def to_dict(self) -> dict[str, Any]:
         d = asdict(self)
@@ -102,6 +105,7 @@ _ALLOWED_CASE_ALIASES = {
     "signal_duration_s",
     "drift_rate_hz_per_s",
     "snr",
+    "snr_ref",
 }
 _REQUIRED_CASE_KEYS = {"name", "morphology", "snr_db"}
 
@@ -303,6 +307,10 @@ def injection_case_from_mapping(payload: dict[str, Any], contract: DatContract) 
     raw = _normalize_case_aliases(dict(payload))
     if raw.get("morphology") is not None:
         raw["morphology"] = str(raw["morphology"]).lower()
+    if raw.get("snr_reference") is not None:
+        raw["snr_reference"] = str(raw["snr_reference"]).lower()
+    if raw.get("noise_estimator") is not None:
+        raw["noise_estimator"] = str(raw["noise_estimator"]).lower()
     raw["abs_freq_hz"] = _resolve_abs_freq_hz(raw, contract)
     _validate_abs_freq_hz(float(raw["abs_freq_hz"]), contract, str(raw.get("name", "<unnamed>")))
     if raw.get("beams") is not None:
@@ -313,6 +321,14 @@ def injection_case_from_mapping(payload: dict[str, Any], contract: DatContract) 
     missing = _REQUIRED_CASE_KEYS - raw.keys()
     if missing:
         raise ValueError(f"Missing required injection signal keys: {sorted(missing)}")
+    snr_reference = str(raw.get("snr_reference", "coarse_channel")).lower()
+    if snr_reference not in {"coarse_channel", "local_psd"}:
+        raise ValueError("snr_reference must be either 'coarse_channel' or 'local_psd'")
+    noise_estimator = str(raw.get("noise_estimator", "coarse_psd")).lower()
+    if snr_reference == "local_psd" and noise_estimator != "coarse_psd":
+        raise ValueError("The first local_psd implementation supports only noise_estimator: coarse_psd")
+    raw["snr_reference"] = snr_reference
+    raw["noise_estimator"] = noise_estimator
     kwargs = {k: raw[k] for k in _CASE_FIELD_NAMES if k in raw}
     return InjectionCase(**kwargs)
 
@@ -333,6 +349,7 @@ def _normalize_case_aliases(raw: dict[str, Any]) -> dict[str, Any]:
     _alias_copy(out, "duration_s", "signal_duration_s")
     _alias_copy(out, "drift_hz_per_s", "drift_rate_hz_per_s")
     _alias_copy(out, "snr_db", "snr")
+    _alias_copy(out, "snr_reference", "snr_ref")
     return out
 
 
@@ -594,6 +611,73 @@ def _validate_single_channel_envelope(contract: DatContract, case: InjectionCase
         )
 
 
+
+
+def _reference_bandwidth_hz(contract: DatContract, case: InjectionCase, stft_nfft: int = 2048) -> tuple[float, str]:
+    """Return the bandwidth used to define local-PSD injection SNR."""
+    if float(case.bandwidth_hz) > 0.0:
+        return float(case.bandwidth_hz), "width_hz"
+    nfft = max(int(stft_nfft), 1)
+    return float(contract.coarse_df_hz / nfft), "one_stft_resolution_element"
+
+
+def _snr_power_plan(
+    sigma: float,
+    contract: DatContract,
+    case: InjectionCase,
+    *,
+    amp_scale: float = 1.0,
+    stft_nfft: int = 2048,
+) -> dict[str, Any]:
+    """Compute requested signal power for the selected injection SNR convention.
+
+    Legacy ``coarse_channel`` mode interprets snr_db as an RMS ratio to the full
+    complex coarse-channel RMS. New ``local_psd`` mode interprets snr_db as
+    signal power divided by the local noise power inside the signal's reference
+    bandwidth.
+    """
+    snr_reference = str(getattr(case, "snr_reference", "coarse_channel") or "coarse_channel").lower()
+    noise_estimator = str(getattr(case, "noise_estimator", "coarse_psd") or "coarse_psd").lower()
+    if snr_reference not in {"coarse_channel", "local_psd"}:
+        raise ValueError("snr_reference must be either 'coarse_channel' or 'local_psd'")
+    if snr_reference == "local_psd" and noise_estimator != "coarse_psd":
+        raise ValueError("The first local_psd implementation supports only noise_estimator: coarse_psd")
+    ref_bw, ref_source = _reference_bandwidth_hz(contract, case, stft_nfft)
+    coarse_bw = float(contract.coarse_df_hz)
+    noise_power_coarse = float(max(sigma, 0.0) ** 2)
+    local_noise_psd = float(noise_power_coarse / max(coarse_bw, 1e-30))
+    reference_noise_power = float(local_noise_psd * max(ref_bw, 0.0))
+    amp_scale_power = float(amp_scale) ** 2
+    if snr_reference == "local_psd":
+        requested_signal_power = reference_noise_power * (10.0 ** (float(case.snr_db) / 10.0)) * amp_scale_power
+    else:
+        requested_signal_power = noise_power_coarse * (10.0 ** (float(case.snr_db) / 10.0)) * amp_scale_power
+    requested_target_rms = float(np.sqrt(max(requested_signal_power, 0.0)))
+    requested_local_psd_snr_db = None
+    if reference_noise_power > 0.0 and requested_signal_power > 0.0:
+        requested_local_psd_snr_db = float(10.0 * np.log10(requested_signal_power / reference_noise_power))
+    return {
+        "snr_reference": snr_reference,
+        "noise_estimator": noise_estimator,
+        "requested_snr_db": float(case.snr_db),
+        "requested_local_psd_snr_db": requested_local_psd_snr_db,
+        "local_noise_psd": local_noise_psd,
+        "reference_bandwidth_hz": float(ref_bw),
+        "reference_bandwidth_source": ref_source,
+        "reference_noise_power": reference_noise_power,
+        "requested_signal_power": float(requested_signal_power),
+        "requested_target_rms": requested_target_rms,
+    }
+
+
+def _realized_local_psd_snr_db(realized_signal_power: float, reference_noise_power: float, channel_scale: float) -> float | None:
+    # Uniform headroom scaling multiplies both signal and base noise, so compare
+    # against the output reference noise power after the same scale.
+    output_reference_noise_power = float(reference_noise_power) * float(channel_scale) ** 2
+    if output_reference_noise_power <= 0.0 or realized_signal_power <= 0.0:
+        return None
+    return float(10.0 * np.log10(float(realized_signal_power) / output_reference_noise_power))
+
 def _signal_rms_on_active_samples(sig: np.ndarray, active: np.ndarray, amp_env: np.ndarray) -> float:
     mod = active.astype(np.float32) * amp_env.astype(np.float32)
     active_mask = mod > 0.0
@@ -719,11 +803,12 @@ def _best_uniform_channel_scale(x: np.ndarray, *, allowed_fraction: float = _ALL
     return float(lo)
 
 
-def _initial_signal_report(case: InjectionCase, rows: int, fs: float) -> dict[str, Any]:
+def _initial_signal_report(case: InjectionCase, rows: int, fs: float, contract: DatContract, stft_nfft: int = 2048) -> dict[str, Any]:
     active = _active_envelope(rows, fs, case)
     effective_tone_count = _effective_tone_count(case)
     start_row = max(0, int(case.start_s * fs))
     end_row = min(rows, start_row + int(case.duration_s * fs))
+    reference_bandwidth_hz, reference_bandwidth_source = _reference_bandwidth_hz(contract, case, stft_nfft)
     return {
         "name": case.name,
         "morphology": case.morphology,
@@ -734,6 +819,8 @@ def _initial_signal_report(case: InjectionCase, rows: int, fs: float) -> dict[st
             "start_freq_hz": float(case.abs_freq_hz),
             "drift_hz_per_s": float(case.drift_hz_per_s),
             "snr_db": float(case.snr_db),
+            "snr_reference": str(case.snr_reference),
+            "noise_estimator": str(case.noise_estimator),
             "width_hz": float(case.bandwidth_hz),
             "effective_tone_count": int(effective_tone_count),
             "start_row": int(start_row),
@@ -741,24 +828,37 @@ def _initial_signal_report(case: InjectionCase, rows: int, fs: float) -> dict[st
         },
         "active_samples": int(np.count_nonzero(active)),
         "active_fraction": float(np.mean(active > 0.0)),
+        "snr_reference": str(case.snr_reference),
+        "noise_estimator": str(case.noise_estimator),
+        "requested_snr_db": float(case.snr_db),
+        "requested_local_psd_snr_db": None,
+        "realized_local_psd_snr_db": None,
+        "local_noise_psd": None,
+        "reference_bandwidth_hz": float(reference_bandwidth_hz),
+        "reference_bandwidth_source": reference_bandwidth_source,
+        "reference_noise_power": None,
+        "output_reference_noise_power": None,
+        "requested_signal_power": None,
+        "realized_signal_power": None,
+        "applied_amplitude": None,
         "amplitude_limited_by_clip": False,
         "channel_rescaled_for_headroom": False,
         "target_channels": [],
     }
 
 
-def _build_signal_reports_and_channel_plan(case_list: list[InjectionCase], rows: int, contract: DatContract) -> tuple[list[dict[str, Any]], dict[int, list[tuple[int, InjectionCase, float, float]]]]:
+def _build_signal_reports_and_channel_plan(case_list: list[InjectionCase], rows: int, contract: DatContract, stft_nfft: int = 2048) -> tuple[list[dict[str, Any]], dict[int, list[tuple[int, InjectionCase, float, float]]]]:
     fs = contract.coarse_df_hz
     signal_reports: list[dict[str, Any]] = []
     channel_plan: dict[int, list[tuple[int, InjectionCase, float, float]]] = {}
     for signal_idx, case in enumerate(case_list):
-        signal_reports.append(_initial_signal_report(case, rows, fs))
+        signal_reports.append(_initial_signal_report(case, rows, fs, contract, stft_nfft))
         for ch, baseband, amp_scale in _target_channels(contract, case):
             channel_plan.setdefault(int(ch), []).append((signal_idx, case, float(baseband), float(amp_scale)))
     return signal_reports, channel_plan
 
 
-def _apply_channel_entries(channel_index: int, base_channel: np.ndarray, contract: DatContract, entries: list[tuple[int, InjectionCase, float, float]]) -> tuple[np.ndarray, list[tuple[int, dict[str, Any]]], dict[str, Any]]:
+def _apply_channel_entries(channel_index: int, base_channel: np.ndarray, contract: DatContract, entries: list[tuple[int, InjectionCase, float, float]], stft_nfft: int = 2048) -> tuple[np.ndarray, list[tuple[int, dict[str, Any]]], dict[str, Any]]:
     rows = int(base_channel.shape[0])
     fs = contract.coarse_df_hz
     sigma = float(np.sqrt(np.mean(np.abs(base_channel) ** 2)))
@@ -771,7 +871,8 @@ def _apply_channel_entries(channel_index: int, base_channel: np.ndarray, contrac
         sig = _complex_signal(rows, fs, case, baseband)
         shaped = (active * amp_env).astype(np.float32) * sig
         raw_sig_rms = _signal_rms_on_active_samples(sig, active, amp_env)
-        requested_target_rms = float(sigma * (10.0 ** (case.snr_db / 20.0)) * amp_scale)
+        snr_plan = _snr_power_plan(sigma, contract, case, amp_scale=amp_scale, stft_nfft=stft_nfft)
+        requested_target_rms = float(snr_plan["requested_target_rms"])
         requested_amp = 0.0 if raw_sig_rms <= 0.0 else float(requested_target_rms / raw_sig_rms)
         requested_delta = requested_amp * shaped
         requested_total += requested_delta
@@ -785,6 +886,7 @@ def _apply_channel_entries(channel_index: int, base_channel: np.ndarray, contrac
             'raw_signal_rms_before_scaling': float(raw_sig_rms),
             'requested_active_signal_rms_before_channel_scale': float(requested_target_rms),
             'requested_amplitude_before_channel_scale': float(requested_amp),
+            'snr_plan': snr_plan,
             'active_mask': (np.abs(shaped.real) + np.abs(shaped.imag)) > 1e-12,
         })
     combined_unscaled = np.asarray(base_channel, dtype=np.complex64) + requested_total
@@ -808,6 +910,12 @@ def _apply_channel_entries(channel_index: int, base_channel: np.ndarray, contrac
         realized_snr_db_vs_original = None
         if sigma > 0.0 and realized_rms > 0.0:
             realized_snr_db_vs_original = float(20.0 * np.log10(realized_rms / sigma))
+        snr_plan = comp['snr_plan']
+        requested_signal_power = float(snr_plan['requested_signal_power'])
+        realized_signal_power = float(realized_rms ** 2)
+        reference_noise_power = float(snr_plan['reference_noise_power'])
+        output_reference_noise_power = float(reference_noise_power * channel_scale ** 2)
+        realized_local_psd_snr_db = _realized_local_psd_snr_db(realized_signal_power, reference_noise_power, channel_scale)
         active_vals = final_channel[comp['active_mask']]
         packed_records.append((
             int(comp['signal_idx']),
@@ -828,9 +936,20 @@ def _apply_channel_entries(channel_index: int, base_channel: np.ndarray, contrac
                 'requested_active_signal_rms_before_channel_scale': float(comp['requested_active_signal_rms_before_channel_scale']),
                 'requested_active_signal_rms': float(comp['requested_active_signal_rms_before_channel_scale'] * channel_scale),
                 'realized_active_signal_rms': float(realized_rms),
+                'snr_reference': str(snr_plan['snr_reference']),
+                'noise_estimator': str(snr_plan['noise_estimator']),
                 'requested_snr_db': float(comp['case'].snr_db),
+                'requested_local_psd_snr_db': snr_plan['requested_local_psd_snr_db'],
                 'realized_snr_db': realized_snr_db,
                 'realized_snr_db_vs_original': realized_snr_db_vs_original,
+                'realized_local_psd_snr_db': realized_local_psd_snr_db,
+                'local_noise_psd': float(snr_plan['local_noise_psd']),
+                'reference_bandwidth_hz': float(snr_plan['reference_bandwidth_hz']),
+                'reference_bandwidth_source': str(snr_plan['reference_bandwidth_source']),
+                'reference_noise_power': reference_noise_power,
+                'output_reference_noise_power': output_reference_noise_power,
+                'requested_signal_power': requested_signal_power,
+                'realized_signal_power': realized_signal_power,
                 'amplitude_limited_by_clip': False,
                 'active_component_clip_fraction': float(_fraction_components_clipped(active_vals)),
             },
@@ -843,6 +962,7 @@ def _inject_case_inplace(
     contract: DatContract,
     case: InjectionCase,
     channel_sigma: np.ndarray,
+    stft_nfft: int = 2048,
 ) -> dict[str, Any]:
     rows = x.shape[0]
     fs = contract.coarse_df_hz
@@ -879,6 +999,7 @@ def _inject_case_inplace(
         })
     start_row = max(0, int(case.start_s * fs))
     end_row = min(rows, start_row + int(case.duration_s * fs))
+    reference_bandwidth_hz, reference_bandwidth_source = _reference_bandwidth_hz(contract, case, stft_nfft)
     return {
         "name": case.name,
         "morphology": case.morphology,
@@ -889,6 +1010,8 @@ def _inject_case_inplace(
             "start_freq_hz": float(case.abs_freq_hz),
             "drift_hz_per_s": float(case.drift_hz_per_s),
             "snr_db": float(case.snr_db),
+            "snr_reference": str(case.snr_reference),
+            "noise_estimator": str(case.noise_estimator),
             "width_hz": float(case.bandwidth_hz),
             "effective_tone_count": int(effective_tone_count),
             "start_row": int(start_row),
@@ -919,24 +1042,44 @@ def _clipping_summary(x: np.ndarray) -> dict[str, Any]:
 
 
 
-def inject_cases_into_words(words: np.ndarray, contract: DatContract, cases: Iterable[InjectionCase]) -> tuple[np.ndarray, dict[str, Any]]:
+
+def _attach_target_report(signal_report: dict[str, Any], target: dict[str, Any]) -> None:
+    """Attach a target-channel report and mirror first-channel SNR fields at signal level."""
+    signal_report["target_channels"].append(target)
+    signal_report["channel_rescaled_for_headroom"] = bool(
+        signal_report.get("channel_rescaled_for_headroom", False) or target.get("channel_rescaled_for_headroom", False)
+    )
+    signal_report["amplitude_limited_by_clip"] = bool(
+        signal_report.get("amplitude_limited_by_clip", False) or target.get("amplitude_limited_by_clip", False)
+    )
+    if len(signal_report.get("target_channels", [])) == 1:
+        for key in (
+            "snr_reference", "noise_estimator", "requested_snr_db", "requested_local_psd_snr_db",
+            "realized_snr_db", "realized_snr_db_vs_original", "realized_local_psd_snr_db",
+            "local_noise_psd", "reference_bandwidth_hz", "reference_bandwidth_source",
+            "reference_noise_power", "output_reference_noise_power", "requested_signal_power",
+            "realized_signal_power", "requested_amplitude", "applied_amplitude", "safe_amplitude_cap",
+            "channel_rms", "channel_rms_after_scale", "channel_scale", "active_component_clip_fraction",
+        ):
+            if key in target:
+                signal_report[key] = target[key]
+
+def inject_cases_into_words(words: np.ndarray, contract: DatContract, cases: Iterable[InjectionCase], *, stft_nfft: int = 2048) -> tuple[np.ndarray, dict[str, Any]]:
     case_list = list(cases)
     if not case_list:
         raise ValueError("At least one InjectionCase is required")
     base_x = decode_words(words)
     rows = int(base_x.shape[0])
-    signal_reports, channel_plan = _build_signal_reports_and_channel_plan(case_list, rows, contract)
+    signal_reports, channel_plan = _build_signal_reports_and_channel_plan(case_list, rows, contract, stft_nfft)
     work_x = np.array(base_x, copy=True)
     rescaled_channels = 0
     for ch, entries in sorted(channel_plan.items()):
-        final_channel, packed_records, channel_meta = _apply_channel_entries(int(ch), base_x[:, ch], contract, entries)
+        final_channel, packed_records, channel_meta = _apply_channel_entries(int(ch), base_x[:, ch], contract, entries, stft_nfft)
         work_x[:, ch] = final_channel
         if channel_meta.get("channel_rescaled_for_headroom", False):
             rescaled_channels += 1
         for signal_idx, target in packed_records:
-            signal_reports[signal_idx]["target_channels"].append(target)
-            signal_reports[signal_idx]["channel_rescaled_for_headroom"] = bool(signal_reports[signal_idx].get("channel_rescaled_for_headroom", False) or target.get("channel_rescaled_for_headroom", False))
-            signal_reports[signal_idx]["amplitude_limited_by_clip"] = bool(signal_reports[signal_idx].get("amplitude_limited_by_clip", False) or target.get("amplitude_limited_by_clip", False))
+            _attach_target_report(signal_reports[signal_idx], target)
     report = {
         "n_signals": len(case_list),
         "n_signals_limited_by_clip": int(sum(1 for sig in signal_reports if sig.get("amplitude_limited_by_clip", False))),
@@ -978,6 +1121,7 @@ def write_injected_dataset(
     *,
     report_path: str | Path | None = None,
     manifest_path: str | Path | None = None,
+    stft_nfft: int = 2048,
 ) -> dict[str, Path | None]:
     if not plan.signals:
         raise ValueError("Injection plan must contain at least one signal")
@@ -993,7 +1137,7 @@ def write_injected_dataset(
     rows = len(words) // contract.channels
     base_mm = np.memmap(base_dat, dtype='<u2', mode='r', shape=(rows, contract.channels))
 
-    signal_reports, channel_plan = _build_signal_reports_and_channel_plan(list(plan.signals), rows, contract)
+    signal_reports, channel_plan = _build_signal_reports_and_channel_plan(list(plan.signals), rows, contract, stft_nfft)
 
     shutil.copyfile(base_dat, out_dat)
     out_mm = np.memmap(out_dat, dtype='<u2', mode='r+', shape=(rows, contract.channels))
@@ -1007,13 +1151,11 @@ def write_injected_dataset(
 
     for ch, entries in sorted(channel_plan.items()):
         x = decode_words_to_complex64(np.asarray(base_mm[:, ch], dtype=np.uint16).reshape(-1, 1))[:, 0]
-        final_channel, packed_records, channel_meta = _apply_channel_entries(int(ch), x, contract, entries)
+        final_channel, packed_records, channel_meta = _apply_channel_entries(int(ch), x, contract, entries, stft_nfft)
         if channel_meta.get("channel_rescaled_for_headroom", False):
             rescaled_channels += 1
         for signal_idx, target in packed_records:
-            signal_reports[signal_idx]["target_channels"].append(target)
-            signal_reports[signal_idx]["channel_rescaled_for_headroom"] = bool(signal_reports[signal_idx].get("channel_rescaled_for_headroom", False) or target.get("channel_rescaled_for_headroom", False))
-            signal_reports[signal_idx]["amplitude_limited_by_clip"] = bool(signal_reports[signal_idx].get("amplitude_limited_by_clip", False) or target.get("amplitude_limited_by_clip", False))
+            _attach_target_report(signal_reports[signal_idx], target)
         rounded_real = np.rint(final_channel.real)
         rounded_imag = np.rint(final_channel.imag)
         clip_real += int(np.count_nonzero((rounded_real < -128.0) | (rounded_real > 127.0)))
@@ -1052,6 +1194,7 @@ def write_injected_dataset(
         "out_dat_path": str(out_dat),
         "rows": int(rows),
         "channels": int(contract.channels),
+        "stft_nfft_for_injection_snr": int(stft_nfft),
         "contract": asdict(contract),
         "observation": manifest_record,
         "notes": list(plan.notes),
@@ -1070,7 +1213,7 @@ def write_injected_dataset(
     }
 
 
-def write_injected_observation(base_dat: str | Path, out_dir: str | Path, contract: DatContract, case: InjectionCase) -> list[Path]:
+def write_injected_observation(base_dat: str | Path, out_dir: str | Path, contract: DatContract, case: InjectionCase, *, stft_nfft: int = 2048) -> list[Path]:
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
     out_paths = []
@@ -1086,7 +1229,7 @@ def write_injected_observation(base_dat: str | Path, out_dir: str | Path, contra
             scan_id=case.name,
             target_id=case.name,
         )
-        write_injected_dataset(base_dat, out_path, contract, plan)
+        write_injected_dataset(base_dat, out_path, contract, plan, stft_nfft=stft_nfft)
         meta = {
             'obs_id': case.name + f'_beam{beam}',
             'beam_id': beam,

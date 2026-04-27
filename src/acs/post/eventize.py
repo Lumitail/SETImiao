@@ -225,10 +225,65 @@ def _candidate_pass(event: Event, best: Hit, cfg: CandidateConfig, native_dt_s: 
     if duration_s < cfg.min_candidate_duration_s:
         return False, ["track_duration_below_threshold"]
 
+    # v1.1.4x: short low-hit fragments are the dominant failure mode for
+    # visually empty candidates.  They can have a high enough coherent metric to
+    # pass generic thresholds simply because many short drift/frequency trials
+    # were tested.  Require a stronger coherent refinement score and total event
+    # score before promoting such fragments to final candidates.  The event is
+    # still retained in events.jsonl and can be inspected with --review-scope
+    # all-events.
+    short_hits = int(getattr(cfg, "short_track_max_hits", 2))
+    short_dur = float(getattr(cfg, "short_track_max_duration_s", 2.5))
+    if event.n_hits <= short_hits or duration_s <= short_dur:
+        short_min_refined = float(getattr(cfg, "short_track_min_refined_snr", 14.0))
+        short_min_score = float(getattr(cfg, "short_track_min_event_score", 16.0))
+        if refined < short_min_refined:
+            return False, ["short_track_refined_snr_below_threshold"]
+        if event.score < short_min_score:
+            return False, ["short_track_score_below_threshold"]
+        reasons.append("short_track_strong_refine")
+
     if event.n_hits >= cfg.min_hits_if_no_strong_refine:
         reasons.append("multi_hit_event")
         return True, reasons
     return False, ["singleton_without_strong_refine"]
+
+
+def _robust_track_from_hits(
+    hit_list: list[Hit],
+    best: Hit,
+    native_dt_s: float,
+    frame_hop_rows: int | None,
+    frame_window_rows: int | None,
+) -> tuple[float, float, float]:
+    """Estimate an event-level frequency/drift track from supported hits.
+
+    Tile-level coherent refinement can choose a biased drift for one frame,
+    particularly near the low-SNR limit.  Event-level reporting, review overlays,
+    and injection matching should use the consensus track from the event support
+    rather than whichever tile happened to have the largest search metric.
+    """
+    best_freq = float(_reference_freq(best) or 0.0)
+    best_t = _anchor_time_s(best, native_dt_s, frame_hop_rows, frame_window_rows)
+    vals: list[tuple[float, float]] = []
+    drifts: list[float] = []
+    for h in hit_list:
+        hf = _reference_freq(h)
+        if hf is None:
+            continue
+        ht = _anchor_time_s(h, native_dt_s, frame_hop_rows, frame_window_rows)
+        vals.append((float(ht), float(hf)))
+        drifts.append(float(_reference_drift(h)))
+    if len(vals) < 2 or not drifts:
+        return best_freq, float(_reference_drift(best)), best_t
+    drift = float(median(drifts))
+    intercepts = [f - drift * (t - best_t) for t, f in vals]
+    freq = float(median(intercepts)) if intercepts else best_freq
+    if not math.isfinite(freq):
+        freq = best_freq
+    if not math.isfinite(drift):
+        drift = float(_reference_drift(best))
+    return freq, drift, best_t
 
 
 def _cluster_reference_track(
@@ -238,9 +293,7 @@ def _cluster_reference_track(
     frame_window_rows: int | None,
 ) -> tuple[Hit, float, float, float]:
     best = cl.best_hit()
-    freq = float(_reference_freq(best) or 0.0)
-    drift = float(_reference_drift(best))
-    tref = _anchor_time_s(best, native_dt_s, frame_hop_rows, frame_window_rows)
+    freq, drift, tref = _robust_track_from_hits(cl.hits, best, native_dt_s, frame_hop_rows, frame_window_rows)
     return best, freq, drift, tref
 
 
@@ -264,7 +317,18 @@ def _clusters_compatible_for_merge(
         return False
     a_row0, a_row1 = _cluster_bounds(a)
     b_row0, b_row1 = _cluster_bounds(b)
-    if _interval_gap(a_row0, a_row1, b_row0, b_row1) > merge_max_gap_rows:
+    gap_rows = _interval_gap(a_row0, a_row1, b_row0, b_row1)
+    base_gap_ok = gap_rows <= merge_max_gap_rows
+    long_gap_s = float(getattr(candidate_cfg, "merge_long_gap_s", 0.0) or 0.0)
+    long_gap_rows = int(round(long_gap_s / max(native_dt_s, 1e-12))) if long_gap_s > 0 else 0
+    long_gap_supported = (
+        (not base_gap_ok)
+        and long_gap_rows > merge_max_gap_rows
+        and gap_rows <= long_gap_rows
+        and len(a.hits) >= int(getattr(candidate_cfg, "merge_long_gap_min_hits", 4))
+        and len(b.hits) >= int(getattr(candidate_cfg, "merge_long_gap_min_hits", 4))
+    )
+    if not base_gap_ok and not long_gap_supported:
         return False
     _, a_freq, a_drift, a_tref = _cluster_reference_track(a, native_dt_s, frame_hop_rows, frame_window_rows)
     _, b_freq, b_drift, b_tref = _cluster_reference_track(b, native_dt_s, frame_hop_rows, frame_window_rows)
@@ -283,6 +347,9 @@ def _clusters_compatible_for_merge(
 
     drift_tol = coincidence_cfg.drift_tol_hz_per_s
     freq_tol = candidate_cfg.merge_freq_tol_hz
+    if long_gap_supported:
+        drift_tol = max(drift_tol, float(getattr(candidate_cfg, "merge_long_gap_drift_tol_hz_per_s", 3.0)))
+        freq_tol = max(freq_tol, float(getattr(candidate_cfg, "merge_long_gap_freq_tol_hz", 128.0)))
     if relaxed_singleton:
         drift_tol = max(drift_tol, candidate_cfg.merge_singleton_drift_tol_hz_per_s)
         freq_tol = max(freq_tol, candidate_cfg.merge_singleton_freq_tol_hz)
@@ -376,6 +443,81 @@ def _merge_clusters(
                     break
     return clusters
 
+
+
+def _filter_track_inlier_hits(
+    hit_list: list[Hit],
+    cfg: CandidateConfig,
+    native_dt_s: float,
+    frame_hop_rows: int | None,
+    frame_window_rows: int | None,
+) -> list[Hit]:
+    """Return hits that are consistent with the best recovered track.
+
+    Event formation deliberately uses fairly permissive fragment merging so weak
+    continuous tracks are not split.  The downside is that a few raw/noise hits
+    close in time can be absorbed into a real event and inflate its duration and
+    recovered-SNR aperture.  This filter is applied after clustering but before
+    scoring/support estimation; it keeps the event definition tied to the best
+    coherent track rather than to every compatible-looking fragment.
+    """
+    if not getattr(cfg, "track_inlier_filter_enabled", True):
+        return hit_list
+    if len(hit_list) < 2:
+        return hit_list
+
+    best = max(
+        hit_list,
+        key=lambda h: (
+            h.refined_snr if h.refined_snr is not None else -1e9,
+            h.incoherent_snr,
+            -h.row0,
+        ),
+    )
+    best_freq = _reference_freq(best)
+    if best_freq is None:
+        return hit_list
+    best_drift = _reference_drift(best)
+    best_t = _anchor_time_s(best, native_dt_s, frame_hop_rows, frame_window_rows)
+    freq_tol = max(float(getattr(cfg, "track_inlier_freq_tol_hz", 60.0)), 1e-9)
+    drift_tol = max(float(getattr(cfg, "track_inlier_drift_tol_hz_per_s", 2.0)), 1e-9)
+    best_refined = float(best.refined_snr if best.refined_snr is not None else best.incoherent_snr)
+    min_refined_abs = float(getattr(cfg, "track_inlier_min_refined_snr", cfg.min_refined_snr))
+    max_drop = float(getattr(cfg, "track_inlier_max_refined_drop_db", 6.0))
+    min_refined_for_inlier = max(min_refined_abs, best_refined - max_drop)
+
+    inliers: list[Hit] = []
+    pending_freq_only: list[Hit] = []
+    for h in hit_list:
+        hf = _reference_freq(h)
+        if hf is None:
+            continue
+        ht = _anchor_time_s(h, native_dt_s, frame_hop_rows, frame_window_rows)
+        pred = float(best_freq) + best_drift * (ht - best_t)
+        h_refined = float(h.refined_snr if h.refined_snr is not None else h.incoherent_snr)
+        if h_refined < min_refined_for_inlier:
+            continue
+        if abs(float(hf) - pred) <= freq_tol:
+            if abs(_reference_drift(h) - best_drift) <= drift_tol:
+                inliers.append(h)
+            else:
+                pending_freq_only.append(h)
+
+    # A single edge/adjacent fragment can have a biased local drift estimate even
+    # when its refined frequency lies on the main track. Keep such a fragment if
+    # it contributes a new tile; reject same-tile alternates because they are
+    # usually duplicate seeds around an already-supported frame.
+    strict_tile_rows = {h.row0 for h in inliers}
+    for h in pending_freq_only:
+        if h.row0 not in strict_tile_rows:
+            inliers.append(h)
+            strict_tile_rows.add(h.row0)
+
+    # Never throw away the event if the filter would leave too little support.
+    # The candidate gate can then decide whether the raw cluster is reliable.
+    if len(inliers) >= max(1, min(int(getattr(cfg, "min_candidate_hits", 3)), len(hit_list))):
+        return inliers
+    return hit_list
 
 def _estimate_support_rows(
     hit_list: list[Hit],
@@ -533,10 +675,28 @@ def cluster_hits_to_events(
     event_hits: dict[str, list[Hit]] = {}
     best_hits: dict[str, Hit] = {}
     for i, cl in enumerate(clusters):
-        hit_list = list(cl.hits)
-        best = cl.best_hit()
+        raw_hit_list = list(cl.hits)
+        hit_list = _filter_track_inlier_hits(
+            raw_hit_list,
+            candidate_cfg,
+            native_dt_s,
+            frame_hop_rows,
+            frame_window_rows,
+        )
+        best = max(
+            hit_list,
+            key=lambda h: (
+                h.refined_snr if h.refined_snr is not None else -1e9,
+                h.incoherent_snr,
+                -h.row0,
+            ),
+        )
         best_refined = max((h.refined_snr for h in hit_list if h.refined_snr is not None), default=None)
         score, notes = _event_score(best, len(hit_list))
+        if len(hit_list) < len(raw_hit_list):
+            notes = list(notes) + [f"track_inlier_hits={len(hit_list)}/{len(raw_hit_list)}"]
+        if len(hit_list) >= 2:
+            notes = list(notes) + ["robust_event_track_from_hits"]
         row0, row1 = _estimate_support_rows(
             hit_list,
             native_dt_s,
@@ -545,6 +705,13 @@ def cluster_hits_to_events(
             tile_step_rows,
         )
         eid = f"{best.obs_id}_event_{i:05d}"
+        event_freq_hz, event_drift_hz_per_s, _event_tref = _robust_track_from_hits(
+            hit_list,
+            best,
+            native_dt_s,
+            frame_hop_rows,
+            frame_window_rows,
+        )
         event = Event(
             event_id=eid,
             obs_id=best.obs_id,
@@ -554,8 +721,8 @@ def cluster_hits_to_events(
             target_id=best.target_id,
             row0=row0,
             row1=row1,
-            freq_hz=_reference_freq(best),
-            drift_hz_per_s=_reference_drift(best),
+            freq_hz=event_freq_hz,
+            drift_hz_per_s=event_drift_hz_per_s,
             score=float(score),
             n_hits=len(hit_list),
             best_incoherent_snr=float(best.incoherent_snr),

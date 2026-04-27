@@ -14,7 +14,7 @@ from ..io.stitcher import build_observation_from_paths, build_observations_from_
 from ..io.manifest import load_manifest
 from ..frontend.stft import build_spectrogram_tile
 from ..preproc.baseline import apply_baseline_and_masks, qc_display_matrix
-from ..search.drift import search_tile
+from ..search.drift import search_tile, iter_search_channels
 from ..refine.coherent import refine_hits
 from ..post.eventize import cluster_hits_to_events
 from ..bench.inject import (
@@ -84,8 +84,10 @@ def _override_runtime_thresholds(cfg, args):
 
 def _run_observation_search(obs, cfg):
     hits = []
+    search_channels = iter_search_channels(obs.contract.channels, cfg.drift)
+    use_sparse_tile = len(search_channels) < obs.contract.channels
     for row0, row1 in _iter_tiles(obs.total_rows, cfg.search_tile_rows, cfg.search_overlap_rows):
-        tile = build_spectrogram_tile(obs, row0, row1, cfg.search_stft)
+        tile = build_spectrogram_tile(obs, row0, row1, cfg.search_stft, channel_indices=search_channels if use_sparse_tile else None)
         tile = apply_baseline_and_masks(tile, cfg.baseline)
         tile_hits = search_tile(tile, cfg.drift)
         tile_hits = refine_hits(obs, tile_hits, cfg.refine)
@@ -202,19 +204,54 @@ def _load_records(path: Path):
     return items
 
 
+def _select_review_records(run_dir: Path, scope: str) -> tuple[list[dict], str]:
+    """Load records for review-build.
+
+    ``candidates`` preserves the historical behavior: review final candidates,
+    falling back to events only when no candidates exist. ``all-events`` reviews
+    every event from events.jsonl so SETI analysts can manually inspect objects
+    that did not pass the automatic candidate gate.
+    """
+    scope = (scope or "candidates").replace("_", "-")
+    if scope in {"all", "events", "all-events"}:
+        return _load_records(run_dir / 'events.jsonl'), "all-events"
+    if scope != "candidates":
+        raise ValueError(f"unsupported review scope: {scope}")
+    records = _load_records(run_dir / 'candidates.jsonl')
+    actual = "candidates"
+    if not records:
+        records = _load_records(run_dir / 'events.jsonl')
+        actual = "all-events-fallback"
+    return records, actual
+
+
 def cmd_review_build(args):
     from ..review.artifacts import render_event_artifact, build_review_index
-    from ..review.injection_compare import find_injection_report, write_injection_comparison
+    from ..review.injection_compare import find_injection_report, select_injection_truth_for_event, write_injection_comparison
     cfg = load_runtime_config(args.config)
     run_dir = Path(args.run_dir)
     obs_list = _obs_from_args_or_manifest(args, cfg)
     obs_by_id = {o.meta.obs_id: o for o in obs_list}
-    records = _load_records(run_dir / 'candidates.jsonl')
-    if not records:
-        records = _load_records(run_dir / 'events.jsonl')
-    records = sorted(records, key=lambda e: e['score'], reverse=True)[:args.top_k]
-    review_dir = run_dir / 'review'
+    review_scope = getattr(args, 'review_scope', 'candidates')
+    records, actual_scope = _select_review_records(run_dir, review_scope)
+    records = sorted(records, key=lambda e: e['score'], reverse=True)
+    top_k_arg = getattr(args, 'top_k', None)
+    if top_k_arg is not None and int(top_k_arg) > 0:
+        records = records[:int(top_k_arg)]
+    elif actual_scope == "candidates" and getattr(cfg.review, 'top_k', 0) and int(cfg.review.top_k) > 0:
+        records = records[:int(cfg.review.top_k)]
+    review_dir_arg = getattr(args, 'review_dir', None)
+    if review_dir_arg:
+        review_dir = Path(review_dir_arg)
+    else:
+        review_dir = run_dir / ('review_all_events' if actual_scope.startswith('all-events') else 'review')
     review_dir.mkdir(parents=True, exist_ok=True)
+    injection_report_path = None
+    injection_report_obj = None
+    if not getattr(args, 'no_injection_compare', False):
+        injection_report_path = find_injection_report(run_dir, getattr(args, 'injection_report', None))
+        if injection_report_path is not None:
+            injection_report_obj = json.loads(Path(injection_report_path).read_text(encoding="utf-8"))
     artifacts = []
     for e in records:
         obs = obs_by_id[e['obs_id']]
@@ -227,12 +264,25 @@ def cmd_review_build(args):
             coincident_beams=tuple(e.get('coincident_beams', [])), is_multibeam_coincident=bool(e.get('is_multibeam_coincident', False)), coincidence_group_id=e.get('coincidence_group_id'),
             candidate_passed=bool(e.get('candidate_passed', False)), candidate_reasons=tuple(e.get('candidate_reasons', [])), notes=tuple(e.get('notes', [])),
         )
-        artifacts.append(render_event_artifact(obs, event, review_dir, cfg.review, cfg.search_stft, cfg.baseline))
+        truth = select_injection_truth_for_event(injection_report_obj, e, cfg) if injection_report_obj is not None else None
+        truth_width_hz = None if truth is None else float(truth.get("width_hz", 0.0))
+        artifact = render_event_artifact(
+            obs,
+            event,
+            review_dir,
+            cfg.review,
+            cfg.search_stft,
+            cfg.baseline,
+            cfg.measurement,
+            truth_width_hz,
+            truth,
+        )
+        artifact["review_scope"] = actual_scope
+        artifacts.append(artifact)
     build_review_index(review_dir, artifacts)
     if not getattr(args, 'no_injection_compare', False):
-        report_path = find_injection_report(run_dir, getattr(args, 'injection_report', None))
-        if report_path is not None:
-            summary = write_injection_comparison(review_dir, report_path, artifacts, cfg)
+        if injection_report_path is not None:
+            summary = write_injection_comparison(review_dir, injection_report_path, artifacts, cfg)
             print(
                 f"Wrote injection comparison for {summary['n_matched']}/{summary['n_injected_signals']} "
                 f"matched signals to {review_dir / 'injection_comparison.csv'}"
@@ -288,6 +338,7 @@ def cmd_inject_signals(args):
         plan,
         report_path=args.report_out,
         manifest_path=args.manifest_out,
+        stft_nfft=cfg.search_stft.nfft,
     )
     report_payload = {}
     if outputs.get('report') is not None:
@@ -347,7 +398,7 @@ def cmd_benchmark_inject(args):
     for case_idx, case in enumerate(cases, start=1):
         print(f"[benchmark] case {case_idx}/{len(cases)}: {case.name}", flush=True)
         case_dir = out_dir / case.name
-        paths = write_injected_observation(base_dat, case_dir, cfg.contract, case)
+        paths = write_injected_observation(base_dat, case_dir, cfg.contract, case, stft_nfft=cfg.search_stft.nfft)
         manifest = {'observations': [{
             'obs_id': case.name + '_beam00',
             'dat_paths': [str(paths[0])],
@@ -446,7 +497,7 @@ def cmd_smoke_sample(args):
     artifacts = []
     pool = candidates if candidates else events
     for e in pool[:1]:
-        artifacts.append(render_event_artifact(obs, e, review_dir, cfg.review, cfg.search_stft, cfg.baseline))
+        artifacts.append(render_event_artifact(obs, e, review_dir, cfg.review, cfg.search_stft, cfg.baseline, cfg.measurement))
     build_review_index(review_dir, artifacts)
     summary = {'n_hits': len(hits), 'n_events': len(events), 'n_candidates': len(candidates), 'n_coincidences': len(coincidences)}
     (out_dir / 'smoke_summary.json').write_text(json.dumps(summary, indent=2), encoding='utf-8')
@@ -491,7 +542,9 @@ def build_parser():
             sp.add_argument('--candidate-min-score', type=float, default=None)
         else:
             sp.add_argument('--run-dir', required=True)
-            sp.add_argument('--top-k', type=int, default=20)
+            sp.add_argument('--top-k', type=int, default=None, help='Maximum review records. For --review-scope all-events, omit or set 0 to render every event.')
+            sp.add_argument('--review-scope', choices=['candidates', 'all-events', 'events', 'all'], default='candidates', help='Review final candidates only, or render all events for manual SETI inspection.')
+            sp.add_argument('--review-dir', default=None, help='Optional output directory for review artifacts. Defaults to run/review or run/review_all_events.')
             sp.add_argument('--injection-report', default=None, help='Optional path to an inject-signals *.inject.json report. If omitted, review-build auto-detects one next to the run directory.')
             sp.add_argument('--no-injection-compare', action='store_true', help='Disable automatic injection-vs-candidate comparison output.')
         sp.set_defaults(func=func)

@@ -5,12 +5,11 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "adaptive-chirp-search"
-version = "1.0.0+x"
+version = "1.1.4+x"
 description = "Adaptive Chirp Search for channelized raw .dat observations"
 readme = "README.md"
 requires-python = ">=3.10"
-license = "MIT"
-license-files = ["LICENSE"]
+license = {text = "MIT"}
 authors = [{name = "ACS Committee"}]
 dependencies = [
   "numpy>=1.26",

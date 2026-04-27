@@ -10,7 +10,7 @@ search_overlap_rows: 8192
 search_stft:
   name: search
   nfft: 2048
-  hop: 4096
+  hop: 1024
   window: hann
 baseline:
   smooth_bins: 1001
@@ -20,9 +20,9 @@ baseline:
   qc_low_percentile: 5.0
   qc_high_percentile: 95.0
 drift:
-  min_hz_per_s: -16.0
-  max_hz_per_s: 36.0
-  step_hz_per_s: 4.0
+  min_hz_per_s: -48.0
+  max_hz_per_s: 48.0
+  step_hz_per_s: 1.0
   seed_top_k_mean_per_channel: 8
   seed_top_k_max_per_channel: 8
   seed_min_separation_bins: 8
@@ -32,15 +32,14 @@ drift:
   - 3
   - 5
   trial_chunk_size: 64
-  backend: numpy
+  backend: auto
   support_threshold: 1.5
-  channel_min: 24
-  channel_max: 62
+  channel_list: null
 refine:
   enabled: true
-  top_n: 48
+  top_n: 64
   drift_half_window_hz_per_s: 8.0
-  drift_step_hz_per_s: 0.25
+  drift_step_hz_per_s: 1.0
   freq_half_window_bins: 4
   min_refined_snr: 14.5
 coincidence:
@@ -74,10 +73,21 @@ candidate:
   allow_singleton_candidates: false
   min_candidate_hits: 3
   min_candidate_duration_s: 4.0
+  track_inlier_filter_enabled: true
+  track_inlier_freq_tol_hz: 60.0
+  track_inlier_drift_tol_hz_per_s: 2.0
+  merge_long_gap_s: 12.0
+  merge_long_gap_min_hits: 4
+  merge_long_gap_freq_tol_hz: 160.0
+  merge_long_gap_drift_tol_hz_per_s: 3.0
+  short_track_max_hits: 2
+  short_track_max_duration_s: 2.5
+  short_track_min_refined_snr: 14.0
+  short_track_min_event_score: 16.0
   track_inlier_min_refined_snr: 14.0
   track_inlier_max_refined_drop_db: 6.0
 review:
-  top_k: 50
+  top_k: 100
   cutout_frames: 21
   cutout_bins: 128
   overview_max_frames: 320
@@ -86,3 +96,14 @@ review:
   aligned_profile_guard_bins: 4
   visual_evidence_min_peak_excess_db: 0.0
   visual_evidence_min_center_excess_db: -3.0
+measurement:
+  enabled: true
+  method: stft_local_background
+  bg_half_width_bins: 128
+  guard_bins: 8
+  min_background_pixels: 256
+  noise_statistic: median
+  min_ridge_bins: 1
+  max_ridge_bins: 17
+  ridge_width_source: auto
+  ridge_snap_half_width_bins: 0
